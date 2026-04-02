@@ -481,7 +481,7 @@
     // --- UPGRADED INVISIBLE QR ENGINE ---
     let html5QrCode = null;
     let isProcessingQR = false;
-    let lastScannedText = "";
+    let scannedThisSession = new Set(); // Session memory prevents double scans completely
 
     function toggleCamera() {
       const container = document.getElementById('cameraContainer');
@@ -496,23 +496,22 @@
         }
 
         isProcessingQR = false;
-        lastScannedText = "";
+        scannedThisSession.clear(); // Wipe the memory clean for a new scanning run
 
         // Removed qrbox constraint entirely: It now scans the full resolution frame
         html5QrCode.start(
           { facingMode: "environment" },
           { fps: 10 },
           (decodedText) => {
-            if (isProcessingQR || decodedText === lastScannedText) return;
+            // If we are currently saving a kid, or if we have ALREADY scanned this exact tag
+            // during this specific camera session, ignore it completely.
+            if (isProcessingQR || scannedThisSession.has(decodedText)) return;
 
             isProcessingQR = true;
-            lastScannedText = decodedText;
+            scannedThisSession.add(decodedText); // Lock this QR code out of future scans
 
             // Send the network request
             sendLogRequest(decodedText);
-
-            // Clear memory after 2 seconds to allow re-scans if needed
-            setTimeout(() => { lastScannedText = ""; }, 2000);
           },
           (errorMessage) => { /* Ignore background frame noise */ }
         ).catch(err => {
@@ -637,9 +636,18 @@
                 let statusText = "COMING";
                 let timeText = "--";
 
-                if (b.status === "Delayed") { tileClass = "tile-delayed"; statusText = "DELAYED"; }
-                else if (b.status === "Arrived") { tileClass = "tile-arrived"; statusText = "HERE"; timeText = b.arrival; }
-                else if (b.status === "Departed") { tileClass = "tile-departed"; statusText = "GONE"; timeText = b.departure; }
+                if (b.status === "Delayed") {
+                  tileClass = "tile-delayed";
+                  statusText = "DELAYED";
+                } else if (b.status === "Arrived") {
+                  tileClass = "tile-arrived";
+                  statusText = "HERE";
+                  timeText = b.arrival;
+                } else if (b.status === "Departed") {
+                  tileClass = "tile-departed";
+                  statusText = "GONE";
+                  timeText = b.departure;
+                }
 
                 popoutHtml += \`
                   <div class="bus-tile \${tileClass}">
