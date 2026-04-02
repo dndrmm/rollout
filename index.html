@@ -28,6 +28,7 @@
     #announcementOverlay.show { opacity: 1; pointer-events: all; }
     .announcement-text { animation: popIn 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; transform: scale(0.5); opacity: 0; }
     @keyframes popIn { to { transform: scale(1); opacity: 1; } }
+
     .aspect-square { aspect-ratio: 1 / 1; }
   </style>
 </head>
@@ -50,7 +51,7 @@
         <span class="text-3xl">⚠️</span>
       </div>
       <h3 class="text-2xl font-extrabold text-center text-slate-800 mb-2">Reset for Tomorrow?</h3>
-      <p class="text-center text-slate-500 mb-6 font-medium text-sm">This will completely clear the live car queue and reset all buses back to 'COMING'. This action cannot be undone.</p>
+      <p class="text-center text-slate-500 mb-6 font-medium text-sm">This will completely wipe the live car queue and reset all buses. This action cannot be undone.</p>
       <div class="flex space-x-3">
         <button onclick="hideEodModal()" class="flex-1 py-3 bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200 transition active:scale-95">Cancel</button>
         <button onclick="confirmEndOfDay()" class="flex-1 py-3 bg-rose-600 text-white font-bold rounded-xl shadow-md shadow-rose-200 hover:bg-rose-700 transition active:scale-95">Yes, Clear It</button>
@@ -142,7 +143,7 @@
         <div id="cameraContainer" class="hidden-view mb-6 bg-slate-900 rounded-2xl shadow-xl relative overflow-hidden flex flex-col justify-center items-center" style="min-height: 250px;">
           <div id="reader" class="w-full h-full"></div>
           <div class="absolute bottom-4 z-10 w-full text-center">
-            <button onclick="toggleCamera()" class="bg-rose-500 text-white font-bold px-4 py-2 rounded-full shadow-lg border-2 border-white/20 text-sm">Stop Scanning</button>
+            <button onclick="toggleCamera()" class="bg-rose-500 text-white font-bold px-4 py-2 rounded-full shadow-lg border-2 border-white/20 text-sm active:scale-95 transition">Stop Scanning</button>
           </div>
         </div>
 
@@ -191,6 +192,7 @@
 
     function playChime() {
       if (isMuted) return;
+
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         if (!AudioContext) return;
@@ -219,7 +221,9 @@
         gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.5);
         osc2.start(ctx.currentTime + 0.4);
         osc2.stop(ctx.currentTime + 1.5);
-      } catch(e) { console.log("Audio synthesis blocked."); }
+      } catch(e) {
+        console.log("Audio synthesis blocked or unsupported.");
+      }
     }
 
     // --- TRAFFIC CONTROL & JITTER ---
@@ -286,9 +290,15 @@
       let newlyArrived = [];
       buses.forEach(b => {
         if (b.status === "Arrived") {
-          if (!knownArrivedBuses.has(b.number)) { newlyArrived.push(b.number); knownArrivedBuses.add(b.number); }
-        } else { knownArrivedBuses.delete(b.number); }
+          if (!knownArrivedBuses.has(b.number)) {
+            newlyArrived.push(b.number);
+            knownArrivedBuses.add(b.number);
+          }
+        } else {
+          knownArrivedBuses.delete(b.number);
+        }
       });
+
       if (newlyArrived.length > 0) triggerAnnouncement(newlyArrived);
     }
 
@@ -298,7 +308,8 @@
       updatePinDisplay();
     }
     function clearPin() {
-      currentPin = ""; updatePinDisplay();
+      currentPin = "";
+      updatePinDisplay();
       document.getElementById('loginErrorText').innerText = "Secure Area";
       document.getElementById('loginErrorText').className = "text-slate-400";
     }
@@ -317,10 +328,13 @@
         .then(res => res.json())
         .then(data => {
           if (data.status === "success") {
-            sessionPin = currentPin; currentPin = "";
+            sessionPin = currentPin;
+            currentPin = "";
             isViewOnly = (data.role === "viewer");
+
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (AudioContext) { const tempCtx = new AudioContext(); tempCtx.resume(); }
+
             launchApp();
           } else {
             clearPin();
@@ -333,6 +347,17 @@
           document.getElementById('loginErrorText').innerText = "Network Error";
           document.getElementById('loginErrorText').className = "text-rose-500 font-semibold";
         });
+    }
+
+    function startViewOnlyMode() {
+      isViewOnly = true;
+      sessionPin = "";
+      clearPin();
+
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (AudioContext) { const tempCtx = new AudioContext(); tempCtx.resume(); }
+
+      launchApp();
     }
 
     function launchApp() {
@@ -352,7 +377,7 @@
         document.getElementById('busTrackerHeader').classList.add('max-w-lg');
       }
 
-      // Enforce camera box is hidden on launch (fixes black box bug)
+      // Hide camera box on launch cleanly
       document.getElementById('cameraContainer').classList.add('hidden-view');
 
       switchMode('carMode');
@@ -361,11 +386,17 @@
     }
 
     function logout() {
-      sessionPin = ""; isViewOnly = false; activeRequests = 0; knownArrivedBuses.clear();
+      sessionPin = "";
+      isViewOnly = false;
+      activeRequests = 0;
+      knownArrivedBuses.clear();
+
       clearTimeout(pollTimer);
 
-      // Fully kill camera
-      if (html5QrCode && html5QrCode.isScanning) { html5QrCode.stop().catch(e => console.log(e)); }
+      // Stop the camera completely to avoid battery drain
+      if (html5QrCode) {
+        html5QrCode.stop().catch(e => console.log(e));
+      }
       document.getElementById('cameraContainer').classList.add('hidden-view');
 
       document.getElementById('appView').classList.add('hidden-view');
@@ -450,36 +481,49 @@
     // --- UPGRADED INVISIBLE QR ENGINE ---
     let html5QrCode = null;
     let isProcessingQR = false;
+    let lastScannedText = "";
 
     function toggleCamera() {
       const container = document.getElementById('cameraContainer');
 
       if (container.classList.contains('hidden-view')) {
-        // Open Camera
+        // Open the camera
         container.classList.remove('hidden-view');
-        if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
+
+        if (!html5QrCode) {
+          // Bypassing the default library UI completely
+          html5QrCode = new Html5Qrcode("reader");
+        }
 
         isProcessingQR = false;
+        lastScannedText = "";
 
+        // Removed qrbox constraint entirely: It now scans the full resolution frame
         html5QrCode.start(
-          { facingMode: "environment" }, // Forces back camera automatically
-          { fps: 10, qrbox: { width: 250, height: 250 } },
+          { facingMode: "environment" },
+          { fps: 10 },
           (decodedText) => {
-            if (isProcessingQR) return; // Prevent double-scans
+            if (isProcessingQR || decodedText === lastScannedText) return;
+
             isProcessingQR = true;
-            html5QrCode.pause(); // Visually freeze the camera
+            lastScannedText = decodedText;
+
+            // Send the network request
             sendLogRequest(decodedText);
+
+            // Clear memory after 2 seconds to allow re-scans if needed
+            setTimeout(() => { lastScannedText = ""; }, 2000);
           },
           (errorMessage) => { /* Ignore background frame noise */ }
         ).catch(err => {
-          showToast("Camera access denied or unavailable", "error");
+          showToast("Camera access denied.", "error");
           container.classList.add('hidden-view');
         });
       } else {
-        // Close Camera
+        // Close the camera
         container.classList.add('hidden-view');
         if (html5QrCode) {
-          html5QrCode.stop().catch(err => console.log("Stop error:", err));
+          html5QrCode.stop().catch(err => console.log("Stop Error", err));
         }
       }
     }
@@ -504,13 +548,11 @@
               showToast(`${studentInfo} Added!`);
               if (activeRequests === 0) fetchCars();
 
-              // Automatically resume scanning for the next kid
+              // Automatically ready for the next QR code
               isProcessingQR = false;
-              if (html5QrCode && html5QrCode.getState() === 2 /* PAUSED */) {
-                html5QrCode.resume();
-              }
             } else {
               showToast(data.message, "error");
+              isProcessingQR = false;
             }
           }, 600);
         });
@@ -542,7 +584,7 @@
             #popoutGrid { flex-grow: 1; display: grid; gap: 0.5rem; padding: 0.5rem; align-content: center; justify-content: center; }
 
             /* Fluid Math fixes the stretched rectangles bug */
-            .bus-tile { aspect-ratio: 1 / 1; margin: auto; width: 100%; height: 100%; max-width: 350px; max-height: 350px; container-type: size; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 1rem; border-width: 4px; border-style: solid; text-align: center; transition: all 0.2s ease; line-height: 1.1; }
+            .bus-tile { aspect-ratio: 1 / 1; width: 100%; height: 100%; margin: auto; max-width: 350px; max-height: 350px; container-type: size; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 1rem; border-width: 4px; border-style: solid; text-align: center; transition: all 0.2s ease; line-height: 1.1; }
 
             .bus-number { font-size: 35cqmin; font-weight: 900; letter-spacing: -0.05em; }
             .bus-status { font-size: 12cqmin; font-weight: 800; letter-spacing: 0.05em; opacity: 0.9; margin-top: 2cqmin; }
@@ -553,6 +595,7 @@
             .tile-arrived { background-color: #fbbf24; color: #78350f; border-color: #f59e0b; box-shadow: 0 10px 25px -5px rgba(245, 158, 11, 0.4); transform: scale(1.02); z-index: 5; }
             .tile-departed { background-color: #10b981; color: #ffffff; border-color: #059669; opacity: 0.8; }
 
+            /* Announcement Overlay Styles for Popout */
             #announcementOverlay { position: fixed; inset: 0; background: rgba(30, 58, 138, 0.95); z-index: 9999; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.5s ease; backdrop-filter: blur(8px); }
             #announcementOverlay.show { opacity: 1; pointer-events: all; }
             .announcement-text { animation: popIn 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; transform: scale(0.5); opacity: 0; }
@@ -566,6 +609,7 @@
               <h1 id="announcementTitle" class="text-5xl md:text-7xl font-extrabold text-white tracking-tight leading-tight">Bus<br>Arrived!</h1>
             </div>
           </div>
+
           <h2>Live Bus Dashboard</h2>
           <div id="popoutGrid"></div>
 
@@ -577,7 +621,7 @@
                  return;
               }
 
-              // Responsive Math based on the specific window shape
+              // Dynamic grid calculation that respects portrait vs landscape displays
               let totalBuses = buses.length;
               let aspect = window.innerWidth / window.innerHeight;
               let cols = Math.ceil(Math.sqrt(totalBuses * aspect));
@@ -720,18 +764,29 @@
       }
 
       fetch(`${API_URL}?action=updateBus&pin=${sessionPin}&row=${rowNum}&status=${newStatus}`)
-        .then(() => { setTimeout(() => { activeRequests--; if (activeRequests === 0) fetchBuses(); }, 600); })
+        .then(() => {
+          setTimeout(() => {
+            activeRequests--;
+            if (activeRequests === 0) fetchBuses();
+          }, 600);
+        })
         .catch(() => { showToast("Network Error", "error"); activeRequests--; fetchBuses(); });
     }
 
     function confirmEndOfDay() {
       hideEodModal();
-      showToast("Running End of Day script...", "success");
+      showToast("Cleaning up...", "success");
+
       fetch(`${API_URL}?action=endOfDay&pin=${sessionPin}`)
         .then(res => res.json())
         .then(data => {
-          if (data.status === "success") { showToast("✅ Spreadsheet Wiped Clean!"); fetchCars(); fetchBuses(); }
-          else { showToast(data.message, "error"); }
+          if (data.status === "success") {
+            showToast("Reset complete!");
+            fetchCars();
+            fetchBuses();
+          } else {
+            showToast(data.message, "error");
+          }
         });
     }
   </script>
