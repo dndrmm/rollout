@@ -10,6 +10,7 @@
   <style>
     body { font-family: 'Inter', sans-serif; background-color: #f8fafc; overscroll-behavior-y: none; -webkit-tap-highlight-color: transparent; }
     .hidden-view { display: none !important; }
+    #reader { border-radius: 1rem; overflow: hidden; }
     #reader video { border-radius: 1rem; object-fit: cover; }
 
     .numpad-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; max-width: 280px; margin: 0 auto; }
@@ -27,7 +28,6 @@
     #announcementOverlay.show { opacity: 1; pointer-events: all; }
     .announcement-text { animation: popIn 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; transform: scale(0.5); opacity: 0; }
     @keyframes popIn { to { transform: scale(1); opacity: 1; } }
-
     .aspect-square { aspect-ratio: 1 / 1; }
   </style>
 </head>
@@ -132,15 +132,18 @@
 
       <div id="carMode" class="block mt-4 max-w-lg mx-auto">
         <div id="carInputSection" class="bg-white p-2 rounded-2xl shadow-sm border border-slate-100 mb-6 flex items-center focus-within:ring-2 ring-indigo-100 transition-all">
-          <button onclick="toggleCamera()" class="p-3 text-slate-400 hover:text-indigo-600 transition bg-slate-50 rounded-xl">
+          <button onclick="toggleCamera()" class="p-3 text-slate-400 hover:text-indigo-600 transition bg-slate-50 rounded-xl" title="Scan QR Code">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
           </button>
           <input type="text" id="manualInput" class="flex-1 bg-transparent px-3 py-3 text-slate-700 font-medium focus:outline-none placeholder-slate-400" placeholder="Type student name...">
           <button onclick="submitManualScan()" class="bg-indigo-600 text-white font-bold px-5 py-3 rounded-xl shadow-md shadow-indigo-200 active:scale-95 transition">Add</button>
         </div>
 
-        <div id="cameraContainer" class="hidden-view mb-6 bg-slate-900 rounded-2xl overflow-hidden shadow-xl relative" style="min-height: 250px;">
-          <div id="reader" width="100%"></div>
+        <div id="cameraContainer" class="hidden-view mb-6 bg-slate-900 rounded-2xl shadow-xl relative overflow-hidden flex flex-col justify-center items-center" style="min-height: 250px;">
+          <div id="reader" class="w-full h-full"></div>
+          <div class="absolute bottom-4 z-10 w-full text-center">
+            <button onclick="toggleCamera()" class="bg-rose-500 text-white font-bold px-4 py-2 rounded-full shadow-lg border-2 border-white/20 text-sm">Stop Scanning</button>
+          </div>
         </div>
 
         <div class="flex justify-between items-end mb-4 px-1">
@@ -169,7 +172,6 @@
     let currentPin = "";
     let sessionPin = "";
     let isViewOnly = false;
-    let html5QrcodeScanner = null;
     let activeRequests = 0;
     let knownArrivedBuses = new Set();
     let popoutWindow = null;
@@ -189,7 +191,6 @@
 
     function playChime() {
       if (isMuted) return;
-
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         if (!AudioContext) return;
@@ -218,9 +219,7 @@
         gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.5);
         osc2.start(ctx.currentTime + 0.4);
         osc2.stop(ctx.currentTime + 1.5);
-      } catch(e) {
-        console.log("Audio synthesis blocked or unsupported.");
-      }
+      } catch(e) { console.log("Audio synthesis blocked."); }
     }
 
     // --- TRAFFIC CONTROL & JITTER ---
@@ -287,15 +286,9 @@
       let newlyArrived = [];
       buses.forEach(b => {
         if (b.status === "Arrived") {
-          if (!knownArrivedBuses.has(b.number)) {
-            newlyArrived.push(b.number);
-            knownArrivedBuses.add(b.number);
-          }
-        } else {
-          knownArrivedBuses.delete(b.number);
-        }
+          if (!knownArrivedBuses.has(b.number)) { newlyArrived.push(b.number); knownArrivedBuses.add(b.number); }
+        } else { knownArrivedBuses.delete(b.number); }
       });
-
       if (newlyArrived.length > 0) triggerAnnouncement(newlyArrived);
     }
 
@@ -305,8 +298,7 @@
       updatePinDisplay();
     }
     function clearPin() {
-      currentPin = "";
-      updatePinDisplay();
+      currentPin = ""; updatePinDisplay();
       document.getElementById('loginErrorText').innerText = "Secure Area";
       document.getElementById('loginErrorText').className = "text-slate-400";
     }
@@ -325,13 +317,10 @@
         .then(res => res.json())
         .then(data => {
           if (data.status === "success") {
-            sessionPin = currentPin;
-            currentPin = "";
+            sessionPin = currentPin; currentPin = "";
             isViewOnly = (data.role === "viewer");
-
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (AudioContext) { const tempCtx = new AudioContext(); tempCtx.resume(); }
-
             launchApp();
           } else {
             clearPin();
@@ -363,20 +352,22 @@
         document.getElementById('busTrackerHeader').classList.add('max-w-lg');
       }
 
+      // Enforce camera box is hidden on launch (fixes black box bug)
+      document.getElementById('cameraContainer').classList.add('hidden-view');
+
       switchMode('carMode');
       fetchBuses();
       scheduleNextPoll();
     }
 
     function logout() {
-      sessionPin = "";
-      isViewOnly = false;
-      activeRequests = 0;
-      knownArrivedBuses.clear();
-
+      sessionPin = ""; isViewOnly = false; activeRequests = 0; knownArrivedBuses.clear();
       clearTimeout(pollTimer);
 
-      if (html5QrcodeScanner) html5QrcodeScanner.clear().catch(e => console.log(e));
+      // Fully kill camera
+      if (html5QrCode && html5QrCode.isScanning) { html5QrCode.stop().catch(e => console.log(e)); }
+      document.getElementById('cameraContainer').classList.add('hidden-view');
+
       document.getElementById('appView').classList.add('hidden-view');
       document.getElementById('appView').classList.remove('flex');
       document.getElementById('loginView').classList.remove('hidden-view');
@@ -399,7 +390,6 @@
     // --- CARS ---
     function fetchCars() {
       if (activeRequests > 0) return;
-      // We must pass the sessionPin now that data is secured
       fetch(`${API_URL}?action=listCars&pin=${sessionPin}`)
         .then(res => res.json())
         .then(data => { if (data.status === "success" && activeRequests === 0) renderCars(data.data); });
@@ -448,37 +438,48 @@
 
     function markCarStatus(rowNum, newStatus, btnElement) {
       activeRequests++;
-
       btnElement.innerText = "Saving...";
       btnElement.disabled = true;
       btnElement.classList.add("opacity-50", "pointer-events-none");
 
       fetch(`${API_URL}?action=updateCarStatus&pin=${sessionPin}&row=${rowNum}&status=${newStatus}`)
-        .then(() => {
-          setTimeout(() => {
-            activeRequests--;
-            if (activeRequests === 0) fetchCars();
-          }, 600);
-        })
+        .then(() => { setTimeout(() => { activeRequests--; if (activeRequests === 0) fetchCars(); }, 600); })
         .catch(() => { showToast("Network Error", "error"); activeRequests--; fetchCars(); });
     }
 
+    // --- UPGRADED INVISIBLE QR ENGINE ---
+    let html5QrCode = null;
+    let isProcessingQR = false;
+
     function toggleCamera() {
       const container = document.getElementById('cameraContainer');
+
       if (container.classList.contains('hidden-view')) {
+        // Open Camera
         container.classList.remove('hidden-view');
-        if (!html5QrcodeScanner) {
-          html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
-          html5QrcodeScanner.render((text) => {
-            html5QrcodeScanner.pause();
-            sendLogRequest(text);
-          }, () => {});
-        }
+        if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
+
+        isProcessingQR = false;
+
+        html5QrCode.start(
+          { facingMode: "environment" }, // Forces back camera automatically
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          (decodedText) => {
+            if (isProcessingQR) return; // Prevent double-scans
+            isProcessingQR = true;
+            html5QrCode.pause(); // Visually freeze the camera
+            sendLogRequest(decodedText);
+          },
+          (errorMessage) => { /* Ignore background frame noise */ }
+        ).catch(err => {
+          showToast("Camera access denied or unavailable", "error");
+          container.classList.add('hidden-view');
+        });
       } else {
+        // Close Camera
         container.classList.add('hidden-view');
-        if (html5QrcodeScanner) {
-          html5QrcodeScanner.clear();
-          html5QrcodeScanner = null;
+        if (html5QrCode) {
+          html5QrCode.stop().catch(err => console.log("Stop error:", err));
         }
       }
     }
@@ -502,7 +503,12 @@
             if (data.status === "success") {
               showToast(`${studentInfo} Added!`);
               if (activeRequests === 0) fetchCars();
-              if(html5QrcodeScanner && html5QrcodeScanner.getState() === 2) html5QrcodeScanner.resume();
+
+              // Automatically resume scanning for the next kid
+              isProcessingQR = false;
+              if (html5QrCode && html5QrCode.getState() === 2 /* PAUSED */) {
+                html5QrCode.resume();
+              }
             } else {
               showToast(data.message, "error");
             }
@@ -533,9 +539,11 @@
             body { font-family: 'Inter', sans-serif; background-color: #f8fafc; margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
             h2 { margin: 0; padding: 0.5rem; text-align: center; font-size: 1.25rem; font-weight: 800; color: #1e293b; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); z-index: 10; letter-spacing: -0.02em; }
 
-            #popoutGrid { flex-grow: 1; display: grid; gap: 0.5rem; padding: 0.5rem; }
+            #popoutGrid { flex-grow: 1; display: grid; gap: 0.5rem; padding: 0.5rem; align-content: center; justify-content: center; }
 
-            .bus-tile { container-type: size; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 1rem; border-width: 4px; border-style: solid; text-align: center; transition: all 0.2s ease; line-height: 1.1; }
+            /* Fluid Math fixes the stretched rectangles bug */
+            .bus-tile { aspect-ratio: 1 / 1; margin: auto; width: 100%; height: 100%; max-width: 350px; max-height: 350px; container-type: size; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 1rem; border-width: 4px; border-style: solid; text-align: center; transition: all 0.2s ease; line-height: 1.1; }
+
             .bus-number { font-size: 35cqmin; font-weight: 900; letter-spacing: -0.05em; }
             .bus-status { font-size: 12cqmin; font-weight: 800; letter-spacing: 0.05em; opacity: 0.9; margin-top: 2cqmin; }
             .bus-time { font-size: 10cqmin; font-weight: 700; opacity: 0.75; margin-top: 1cqmin; }
@@ -545,7 +553,6 @@
             .tile-arrived { background-color: #fbbf24; color: #78350f; border-color: #f59e0b; box-shadow: 0 10px 25px -5px rgba(245, 158, 11, 0.4); transform: scale(1.02); z-index: 5; }
             .tile-departed { background-color: #10b981; color: #ffffff; border-color: #059669; opacity: 0.8; }
 
-            /* Announcement Overlay Styles for Popout */
             #announcementOverlay { position: fixed; inset: 0; background: rgba(30, 58, 138, 0.95); z-index: 9999; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.5s ease; backdrop-filter: blur(8px); }
             #announcementOverlay.show { opacity: 1; pointer-events: all; }
             .announcement-text { animation: popIn 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; transform: scale(0.5); opacity: 0; }
@@ -559,25 +566,10 @@
               <h1 id="announcementTitle" class="text-5xl md:text-7xl font-extrabold text-white tracking-tight leading-tight">Bus<br>Arrived!</h1>
             </div>
           </div>
-
           <h2>Live Bus Dashboard</h2>
           <div id="popoutGrid"></div>
 
           <script>
-            // Injecting the API URL and Session PIN directly into the popout so it can authenticate
-            const API_URL = "${API_URL}";
-            const sessionPin = "${sessionPin}";
-
-            function fetchPopoutBuses() {
-              fetch(API_URL + "?action=listBuses&pin=" + sessionPin)
-                .then(res => res.json())
-                .then(data => {
-                  if (data.status === "success") {
-                    renderPopoutBuses(data.data);
-                  }
-                });
-            }
-
             function renderPopoutBuses(buses) {
               const popContainer = document.getElementById('popoutGrid');
               if (buses.length === 0) {
@@ -585,8 +577,11 @@
                  return;
               }
 
+              // Responsive Math based on the specific window shape
               let totalBuses = buses.length;
-              let cols = Math.ceil(Math.sqrt(totalBuses * 1.5));
+              let aspect = window.innerWidth / window.innerHeight;
+              let cols = Math.ceil(Math.sqrt(totalBuses * aspect));
+              if (cols < 1) cols = 1;
               let rows = Math.ceil(totalBuses / cols);
 
               popContainer.style.gridTemplateColumns = \`repeat(\${cols}, 1fr)\`;
@@ -598,18 +593,9 @@
                 let statusText = "COMING";
                 let timeText = "--";
 
-                if (b.status === "Delayed") {
-                  tileClass = "tile-delayed";
-                  statusText = "DELAYED";
-                } else if (b.status === "Arrived") {
-                  tileClass = "tile-arrived";
-                  statusText = "HERE";
-                  timeText = b.arrival;
-                } else if (b.status === "Departed") {
-                  tileClass = "tile-departed";
-                  statusText = "GONE";
-                  timeText = b.departure;
-                }
+                if (b.status === "Delayed") { tileClass = "tile-delayed"; statusText = "DELAYED"; }
+                else if (b.status === "Arrived") { tileClass = "tile-arrived"; statusText = "HERE"; timeText = b.arrival; }
+                else if (b.status === "Departed") { tileClass = "tile-departed"; statusText = "GONE"; timeText = b.departure; }
 
                 popoutHtml += \`
                   <div class="bus-tile \${tileClass}">
@@ -625,15 +611,12 @@
         </html>
       `);
       popoutWindow.document.close();
-
-      // We removed the old global fetchBuses() call from inside the popout HTML block
-      // and moved the loop control into the main window to keep everything synced securely.
+      fetchBuses();
     }
 
     function fetchBuses() {
       if (activeRequests > 0) return;
 
-      // Pass the sessionPin to securely request data
       fetch(`${API_URL}?action=listBuses&pin=${sessionPin}`)
         .then(res => res.json())
         .then(data => {
@@ -641,7 +624,7 @@
             checkBusArrivals(data.data);
             renderBuses(data.data);
 
-            // If popout is open, trigger its internal render function directly with the fresh data
+            // Push directly to popout if open
             if (popoutWindow && !popoutWindow.closed && popoutWindow.renderPopoutBuses) {
                popoutWindow.renderPopoutBuses(data.data);
             }
@@ -657,13 +640,10 @@
         return;
       }
 
-      // Main App Window Rendering
       let mainHtml = "";
 
       if (isViewOnly) {
-        // Main Window Classroom View
         list.className = "grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-4 w-full";
-
         buses.forEach(b => {
           let cardStyle = "bg-white text-slate-400 border-slate-200 shadow-sm opacity-60";
           let statusText = "COMING";
@@ -690,15 +670,12 @@
             </div>`;
         });
       } else {
-        // Main Window Staff View (Toggle Buttons)
         list.className = "space-y-3 max-w-lg mx-auto";
-
         buses.forEach(b => {
           let statusPill = "";
           let btnArrived = "";
           let btnDeparted = "";
 
-          // Clickable Expected/Delayed Badge
           if (b.status === "Pending" || b.status === "") {
             statusPill = `<button onclick="updateBus(${b.row}, 'Delayed', this)" class="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1 rounded-full text-xs font-bold tracking-wide transition active:scale-95 cursor-pointer">COMING</button>`;
           } else if (b.status === "Delayed") {
@@ -709,7 +686,6 @@
             statusPill = `<span class="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide cursor-default">GONE: ${b.departure}</span>`;
           }
 
-          // Side-by-side action buttons
           if (b.status === "Pending" || b.status === "" || b.status === "Delayed") {
             btnArrived = `<button onclick="updateBus(${b.row}, 'Arrived', this)" class="bg-white border-2 border-amber-400 text-amber-600 hover:bg-amber-50 font-bold py-2.5 px-4 rounded-xl active:scale-95 transition shadow-sm">Arrived</button>`;
             btnDeparted = `<button disabled class="bg-slate-50 border-2 border-slate-200 text-slate-400 font-bold py-2.5 px-4 rounded-xl opacity-50 cursor-not-allowed">Departed</button>`;
@@ -736,7 +712,6 @@
 
     function updateBus(rowNum, newStatus, btnElement) {
       activeRequests++;
-
       if(btnElement.tagName.toLowerCase() === 'BUTTON' && btnElement.innerText !== 'Arrived' && btnElement.innerText !== 'Departed') {
          btnElement.classList.add('opacity-50');
       } else {
@@ -745,29 +720,18 @@
       }
 
       fetch(`${API_URL}?action=updateBus&pin=${sessionPin}&row=${rowNum}&status=${newStatus}`)
-        .then(() => {
-          setTimeout(() => {
-            activeRequests--;
-            if (activeRequests === 0) fetchBuses();
-          }, 600);
-        })
+        .then(() => { setTimeout(() => { activeRequests--; if (activeRequests === 0) fetchBuses(); }, 600); })
         .catch(() => { showToast("Network Error", "error"); activeRequests--; fetchBuses(); });
     }
 
     function confirmEndOfDay() {
       hideEodModal();
       showToast("Running End of Day script...", "success");
-
       fetch(`${API_URL}?action=endOfDay&pin=${sessionPin}`)
         .then(res => res.json())
         .then(data => {
-          if (data.status === "success") {
-            showToast("✅ Spreadsheet Wiped Clean!");
-            fetchCars();
-            fetchBuses();
-          } else {
-            showToast(data.message, "error");
-          }
+          if (data.status === "success") { showToast("✅ Spreadsheet Wiped Clean!"); fetchCars(); fetchBuses(); }
+          else { showToast(data.message, "error"); }
         });
     }
   </script>
