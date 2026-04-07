@@ -177,6 +177,10 @@
     let knownArrivedBuses = new Set();
     let popoutWindow = null;
 
+    // --- OPTIMISTIC UI LOCAL STATE ---
+    let localCars = [];
+    let localBuses = [];
+
     // --- MUTE CONTROL & SYNTHESIZED CHIME ---
     let isMuted = false;
 
@@ -192,7 +196,6 @@
 
     function playChime() {
       if (isMuted) return;
-
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         if (!AudioContext) return;
@@ -221,9 +224,7 @@
         gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.5);
         osc2.start(ctx.currentTime + 0.4);
         osc2.stop(ctx.currentTime + 1.5);
-      } catch(e) {
-        console.log("Audio synthesis blocked or unsupported.");
-      }
+      } catch(e) { console.log("Audio synthesis blocked or unsupported."); }
     }
 
     // --- TRAFFIC CONTROL & JITTER ---
@@ -298,7 +299,6 @@
           knownArrivedBuses.delete(b.number);
         }
       });
-
       if (newlyArrived.length > 0) triggerAnnouncement(newlyArrived);
     }
 
@@ -331,10 +331,8 @@
             sessionPin = currentPin;
             currentPin = "";
             isViewOnly = (data.role === "viewer");
-
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (AudioContext) { const tempCtx = new AudioContext(); tempCtx.resume(); }
-
             launchApp();
           } else {
             clearPin();
@@ -353,10 +351,8 @@
       isViewOnly = true;
       sessionPin = "";
       clearPin();
-
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       if (AudioContext) { const tempCtx = new AudioContext(); tempCtx.resume(); }
-
       launchApp();
     }
 
@@ -385,16 +381,11 @@
     }
 
     function logout() {
-      sessionPin = "";
-      isViewOnly = false;
-      activeRequests = 0;
-      knownArrivedBuses.clear();
-
+      sessionPin = ""; isViewOnly = false; activeRequests = 0;
+      knownArrivedBuses.clear(); localCars = []; localBuses = [];
       clearTimeout(pollTimer);
 
-      if (html5QrCode) {
-        html5QrCode.stop().catch(e => console.log(e));
-      }
+      if (html5QrCode) { html5QrCode.stop().catch(e => console.log(e)); }
       document.getElementById('cameraContainer').classList.add('hidden-view');
 
       document.getElementById('appView').classList.add('hidden-view');
@@ -416,12 +407,17 @@
       if (modeId === 'busMode') fetchBuses();
     }
 
-    // --- CARS ---
+    // --- CARS (Optimistic Updates) ---
     function fetchCars() {
       if (activeRequests > 0) return;
       fetch(`${API_URL}?action=listCars&pin=${sessionPin}`)
         .then(res => res.json())
-        .then(data => { if (data.status === "success" && activeRequests === 0) renderCars(data.data); });
+        .then(data => {
+          if (data.status === "success" && activeRequests === 0) {
+            localCars = data.data; // Sync local state with server
+            renderCars(localCars);
+          }
+        });
     }
 
     function renderCars(students) {
@@ -431,33 +427,39 @@
         return;
       }
 
-      students.sort((a, b) => {
+      // Sort local copy so we don't mess up references
+      let displayCars = [...students].sort((a, b) => {
         if (a.status === "Checked Off" && b.status !== "Checked Off") return 1;
         if (a.status !== "Checked Off" && b.status === "Checked Off") return -1;
         return 0;
       });
 
       let html = "";
-      students.forEach((s, index) => {
+      displayCars.forEach((s, index) => {
         const isChecked = s.status === "Checked Off";
+        const isSaving = s.status === "Saving...";
+
         const cardClass = isChecked ? "bg-slate-50 border-slate-200 opacity-60" : "bg-white border-transparent shadow-[0_4px_14px_rgba(0,0,0,0.04)] ring-1 ring-slate-100";
 
         let actionUI = "";
         if (!isViewOnly) {
-          if (!isChecked) {
-            actionUI = `<button onclick="markCarStatus(${s.row}, 'Checked Off', this)" class="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 active:scale-95 font-bold py-2 px-5 rounded-xl transition">Pick Up</button>`;
+          if (isSaving) {
+            actionUI = `<button disabled class="bg-slate-100 text-slate-400 font-bold py-2 px-5 rounded-xl opacity-50">Saving...</button>`;
+          } else if (!isChecked) {
+            actionUI = `<button onclick="markCarStatus(${s.row}, 'Checked Off')" class="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 active:scale-95 font-bold py-2 px-5 rounded-xl transition">Pick Up</button>`;
           } else {
             actionUI = `<button disabled class="bg-emerald-100 text-emerald-700 font-bold py-2 px-5 rounded-xl flex items-center"><svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>Picked Up</button>`;
           }
         }
 
-        let rankHtml = !isChecked ? `<div class="bg-indigo-600 text-white font-black w-8 h-8 rounded-full flex items-center justify-center text-sm mr-3 shadow-sm shadow-indigo-200">#${index + 1}</div>` : "";
+        let rankHtml = (!isChecked && !isSaving) ? `<div class="bg-indigo-600 text-white font-black w-8 h-8 rounded-full flex items-center justify-center text-sm mr-3 shadow-sm shadow-indigo-200">#${index + 1}</div>` : "";
+        if (isSaving) rankHtml = `<div class="bg-slate-300 text-white font-black w-8 h-8 rounded-full flex items-center justify-center text-sm mr-3 shadow-sm">...</div>`;
 
         html += `
           <div class="flex items-center justify-between p-4 rounded-2xl transition-all duration-300 ${cardClass} mb-3">
             <div class="flex items-center">
               ${rankHtml}
-              <span class="font-bold text-lg ${isChecked ? 'text-slate-400 line-through' : 'text-slate-800'}">${s.info}</span>
+              <span class="font-bold text-lg ${isChecked ? 'text-slate-400 line-through' : 'text-slate-800'} ${isSaving ? 'opacity-50' : ''}">${s.info}</span>
             </div>
             ${actionUI}
           </div>`;
@@ -465,12 +467,14 @@
       list.innerHTML = html;
     }
 
-    function markCarStatus(rowNum, newStatus, btnElement) {
-      activeRequests++;
-      btnElement.innerText = "Saving...";
-      btnElement.disabled = true;
-      btnElement.classList.add("opacity-50", "pointer-events-none");
+    function markCarStatus(rowNum, newStatus) {
+      // 1. Optimistic UI: Update locally instantly
+      let car = localCars.find(c => c.row === rowNum);
+      if (car) car.status = newStatus;
+      renderCars(localCars);
 
+      // 2. Network Request
+      activeRequests++;
       fetch(`${API_URL}?action=updateCarStatus&pin=${sessionPin}&row=${rowNum}&status=${newStatus}`)
         .then(() => { setTimeout(() => { activeRequests--; if (activeRequests === 0) fetchCars(); }, 600); })
         .catch(() => { showToast("Network Error", "error"); activeRequests--; fetchCars(); });
@@ -486,10 +490,7 @@
 
       if (container.classList.contains('hidden-view')) {
         container.classList.remove('hidden-view');
-
-        if (!html5QrCode) {
-          html5QrCode = new Html5Qrcode("reader");
-        }
+        if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
 
         isProcessingQR = false;
         scannedThisSession.clear();
@@ -502,7 +503,6 @@
 
             isProcessingQR = true;
             scannedThisSession.add(decodedText);
-
             sendLogRequest(decodedText);
           },
           (errorMessage) => { /* Ignore background frame noise */ }
@@ -512,9 +512,7 @@
         });
       } else {
         container.classList.add('hidden-view');
-        if (html5QrCode) {
-          html5QrCode.stop().catch(err => console.log("Stop Error", err));
-        }
+        if (html5QrCode) html5QrCode.stop().catch(err => console.log("Stop Error", err));
       }
     }
 
@@ -527,19 +525,27 @@
     }
 
     function sendLogRequest(studentInfo) {
-      activeRequests++;
+      // 1. Optimistic UI: Inject fake row instantly
+      let fakeRowId = Date.now(); // Temp ID until server confirms
+      localCars.push({ row: fakeRowId, info: studentInfo, status: "Saving...", time: "" });
+      renderCars(localCars);
+      showToast(`${studentInfo} Added!`);
 
+      // 2. Network Request
+      activeRequests++;
       fetch(`${API_URL}?action=scanQR&pin=${sessionPin}&studentInfo=${encodeURIComponent(studentInfo)}`)
         .then(res => res.json())
         .then(data => {
           setTimeout(() => {
             activeRequests--;
             if (data.status === "success") {
-              showToast(`${studentInfo} Added!`);
-              if (activeRequests === 0) fetchCars();
+              if (activeRequests === 0) fetchCars(); // Sync to get real Row ID
               isProcessingQR = false;
             } else {
               showToast(data.message, "error");
+              // Remove the fake row on failure
+              localCars = localCars.filter(c => c.row !== fakeRowId);
+              renderCars(localCars);
               isProcessingQR = false;
             }
           }, 600);
@@ -568,11 +574,7 @@
           <style>
             body { font-family: 'Inter', sans-serif; background-color: #f8fafc; margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
             h2 { margin: 0; padding: 0.5rem; text-align: center; font-size: 1.25rem; font-weight: 800; color: #1e293b; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); z-index: 10; letter-spacing: -0.02em; flex-shrink: 0; }
-
-            /* Min-height 0 is critical to prevent grid from overflowing flex container */
             #popoutGrid { flex-grow: 1; display: grid; gap: 0.5rem; padding: 0.5rem; min-height: 0; }
-
-            /* Dynamic size controlled by grid tracks, overflow hidden prevents weird rendering */
             .bus-tile { width: 100%; height: 100%; container-type: inline-size; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 1rem; border-width: 4px; border-style: solid; text-align: center; transition: all 0.2s ease; line-height: 1.1; overflow: hidden; }
 
             .bus-number { font-size: 35cqw; font-weight: 900; letter-spacing: -0.05em; }
@@ -602,13 +604,10 @@
           <div id="popoutGrid"></div>
 
           <script>
-            // Real-time window resize listener
-            window.addEventListener('resize', () => {
-              if (window.currentBuses) renderPopoutBuses(window.currentBuses);
-            });
+            window.addEventListener('resize', () => { if (window.currentBuses) renderPopoutBuses(window.currentBuses); });
 
             function renderPopoutBuses(buses) {
-              window.currentBuses = buses; // Store data for resizing
+              window.currentBuses = buses;
 
               const popContainer = document.getElementById('popoutGrid');
               if (buses.length === 0) {
@@ -616,10 +615,9 @@
                  return;
               }
 
-              // The Perfect Fit Algorithm
               let totalBuses = buses.length;
               let w = window.innerWidth;
-              let h = window.innerHeight - 50; // Account for the height of the H2 header
+              let h = window.innerHeight - 50;
 
               let bestCols = 1;
               let bestRows = totalBuses;
@@ -638,7 +636,6 @@
                 }
               }
 
-              // Force the CSS grid to use our perfect row/column math without overflowing
               popContainer.style.gridTemplateColumns = \`repeat(\${bestCols}, minmax(0, 1fr))\`;
               popContainer.style.gridTemplateRows = \`repeat(\${bestRows}, minmax(0, 1fr))\`;
 
@@ -666,9 +663,15 @@
         </html>
       `);
       popoutWindow.document.close();
+
+      // If we already have buses in local memory, render them instantly
+      if (localBuses.length > 0) {
+         popoutWindow.renderPopoutBuses(localBuses);
+      }
       fetchBuses();
     }
 
+    // --- BUSES (Optimistic Updates) ---
     function fetchBuses() {
       if (activeRequests > 0) return;
 
@@ -676,11 +679,12 @@
         .then(res => res.json())
         .then(data => {
           if (data.status === "success" && activeRequests === 0) {
-            checkBusArrivals(data.data);
-            renderBuses(data.data);
+            localBuses = data.data; // Sync local state
+            checkBusArrivals(localBuses);
+            renderBuses(localBuses);
 
             if (popoutWindow && !popoutWindow.closed && popoutWindow.renderPopoutBuses) {
-               popoutWindow.renderPopoutBuses(data.data);
+               popoutWindow.renderPopoutBuses(localBuses);
             }
           }
         });
@@ -731,9 +735,9 @@
           let btnDeparted = "";
 
           if (b.status === "Pending" || b.status === "") {
-            statusPill = `<button onclick="updateBus(${b.row}, 'Delayed', this)" class="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1 rounded-full text-xs font-bold tracking-wide transition active:scale-95 cursor-pointer">COMING</button>`;
+            statusPill = `<button onclick="updateBus(${b.row}, 'Delayed')" class="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1 rounded-full text-xs font-bold tracking-wide transition active:scale-95 cursor-pointer">COMING</button>`;
           } else if (b.status === "Delayed") {
-            statusPill = `<button onclick="updateBus(${b.row}, 'Pending', this)" class="bg-rose-100 hover:bg-rose-200 text-rose-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide transition active:scale-95 cursor-pointer">DELAYED</button>`;
+            statusPill = `<button onclick="updateBus(${b.row}, 'Pending')" class="bg-rose-100 hover:bg-rose-200 text-rose-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide transition active:scale-95 cursor-pointer">DELAYED</button>`;
           } else if (b.status === "Arrived") {
             statusPill = `<span class="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide cursor-default">HERE: ${b.arrival}</span>`;
           } else if (b.status === "Departed") {
@@ -741,14 +745,14 @@
           }
 
           if (b.status === "Pending" || b.status === "" || b.status === "Delayed") {
-            btnArrived = `<button onclick="updateBus(${b.row}, 'Arrived', this)" class="bg-white border-2 border-amber-400 text-amber-600 hover:bg-amber-50 font-bold py-2.5 px-4 rounded-xl active:scale-95 transition shadow-sm">Arrived</button>`;
+            btnArrived = `<button onclick="updateBus(${b.row}, 'Arrived')" class="bg-white border-2 border-amber-400 text-amber-600 hover:bg-amber-50 font-bold py-2.5 px-4 rounded-xl active:scale-95 transition shadow-sm">Arrived</button>`;
             btnDeparted = `<button disabled class="bg-slate-50 border-2 border-slate-200 text-slate-400 font-bold py-2.5 px-4 rounded-xl opacity-50 cursor-not-allowed">Departed</button>`;
           } else if (b.status === "Arrived") {
-            btnArrived = `<button onclick="updateBus(${b.row}, 'Pending', this)" class="bg-amber-500 text-white border-2 border-amber-500 hover:bg-amber-600 font-bold py-2.5 px-4 rounded-xl shadow-sm active:scale-95 transition flex items-center" title="Click to undo"><svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg> Arrived</button>`;
-            btnDeparted = `<button onclick="updateBus(${b.row}, 'Departed', this)" class="bg-white border-2 border-emerald-500 text-emerald-600 hover:bg-emerald-50 font-bold py-2.5 px-4 rounded-xl active:scale-95 transition shadow-sm">Departed</button>`;
+            btnArrived = `<button onclick="updateBus(${b.row}, 'Pending')" class="bg-amber-500 text-white border-2 border-amber-500 hover:bg-amber-600 font-bold py-2.5 px-4 rounded-xl shadow-sm active:scale-95 transition flex items-center" title="Click to undo"><svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg> Arrived</button>`;
+            btnDeparted = `<button onclick="updateBus(${b.row}, 'Departed')" class="bg-white border-2 border-emerald-500 text-emerald-600 hover:bg-emerald-50 font-bold py-2.5 px-4 rounded-xl active:scale-95 transition shadow-sm">Departed</button>`;
           } else if (b.status === "Departed") {
             btnArrived = `<button disabled class="bg-slate-50 border-2 border-slate-200 text-slate-400 font-bold py-2.5 px-4 rounded-xl opacity-50 cursor-not-allowed">Arrived</button>`;
-            btnDeparted = `<button onclick="updateBus(${b.row}, 'Arrived', this)" class="bg-emerald-500 text-white border-2 border-emerald-500 hover:bg-emerald-600 font-bold py-2.5 px-4 rounded-xl shadow-sm active:scale-95 transition flex items-center" title="Click to undo"><svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg> Departed</button>`;
+            btnDeparted = `<button onclick="updateBus(${b.row}, 'Arrived')" class="bg-emerald-500 text-white border-2 border-emerald-500 hover:bg-emerald-600 font-bold py-2.5 px-4 rounded-xl shadow-sm active:scale-95 transition flex items-center" title="Click to undo"><svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg> Departed</button>`;
           }
 
           mainHtml += `
@@ -764,15 +768,23 @@
       list.innerHTML = mainHtml;
     }
 
-    function updateBus(rowNum, newStatus, btnElement) {
-      activeRequests++;
-      if(btnElement.tagName.toLowerCase() === 'BUTTON' && btnElement.innerText !== 'Arrived' && btnElement.innerText !== 'Departed') {
-         btnElement.classList.add('opacity-50');
-      } else {
-         const container = btnElement.parentElement;
-         container.innerHTML = `<span class="text-slate-400 font-semibold px-4 py-2">Saving...</span>`;
+    function updateBus(rowNum, newStatus) {
+      // 1. Optimistic UI: Update locally instantly
+      let bus = localBuses.find(b => b.row === rowNum);
+      if (bus) {
+        bus.status = newStatus;
+        let timeString = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        if (newStatus === "Arrived") bus.arrival = timeString;
+        if (newStatus === "Departed") bus.departure = timeString;
       }
 
+      renderBuses(localBuses);
+      if (popoutWindow && !popoutWindow.closed && popoutWindow.renderPopoutBuses) {
+         popoutWindow.renderPopoutBuses(localBuses);
+      }
+
+      // 2. Network Request
+      activeRequests++;
       fetch(`${API_URL}?action=updateBus&pin=${sessionPin}&row=${rowNum}&status=${newStatus}`)
         .then(() => {
           setTimeout(() => {
