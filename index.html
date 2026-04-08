@@ -10,8 +10,11 @@
   <style>
     body { font-family: 'Inter', sans-serif; background-color: #f8fafc; overscroll-behavior-y: none; -webkit-tap-highlight-color: transparent; }
     .hidden-view { display: none !important; }
-    #reader { border-radius: 1rem; overflow: hidden; }
+
+    /* Clean up the reader borders to match our UI */
+    #reader { border-radius: 1rem; overflow: hidden; border: none !important; }
     #reader video { border-radius: 1rem; object-fit: cover; }
+    #reader__dashboard_section_csr span { color: white !important; }
 
     .numpad-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; max-width: 280px; margin: 0 auto; }
     .num-btn { background: #ffffff; border-radius: 50%; width: 72px; height: 72px; font-size: 1.75rem; font-weight: 600; color: #0f172a; box-shadow: 0 4px 14px rgba(0,0,0,0.06); display: flex; align-items: center; justify-content: center; user-select: none; transition: all 0.15s ease; cursor: pointer; border: 1px solid #f1f5f9; }
@@ -101,6 +104,8 @@
         <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
       </div>
     </div>
+
+    <div class="absolute bottom-6 text-slate-400 text-xs font-semibold tracking-wider">v2.4.0</div>
   </div>
 
   <div id="appView" class="hidden-view flex-col h-screen bg-slate-50">
@@ -154,10 +159,10 @@
           <button onclick="submitManualScan()" class="bg-indigo-600 text-white font-bold px-5 py-3 rounded-xl shadow-md shadow-indigo-200 active:scale-95 transition">Add</button>
         </div>
 
-        <div id="cameraContainer" class="hidden-view mb-6 bg-slate-900 rounded-2xl shadow-xl relative overflow-hidden flex flex-col justify-center items-center" style="min-height: 250px;">
-          <div id="reader" class="w-full h-full"></div>
-          <div class="absolute bottom-4 z-10 w-full text-center">
-            <button onclick="toggleCamera()" class="bg-rose-500 text-white font-bold px-4 py-2 rounded-full shadow-lg border-2 border-white/20 text-sm active:scale-95 transition">Stop Scanning</button>
+        <div id="cameraContainer" class="hidden-view mb-6 bg-slate-900 rounded-2xl shadow-xl relative overflow-hidden flex flex-col justify-center items-center w-full max-w-sm mx-auto aspect-square">
+          <div id="reader" class="w-full h-full flex items-center justify-center"></div>
+          <div class="absolute bottom-4 z-20 w-full text-center">
+            <button onclick="toggleCamera()" class="bg-rose-600 text-white font-extrabold px-6 py-2.5 rounded-full shadow-[0_4px_14px_rgba(225,29,72,0.4)] border-2 border-white/20 text-sm active:scale-95 transition uppercase tracking-wider">Stop Scanning</button>
           </div>
         </div>
 
@@ -191,6 +196,10 @@
     let knownArrivedBuses = new Set();
     let popoutWindow = null;
 
+    // --- OPTIMISTIC UI LOCAL STATE ---
+    let localCars = [];
+    let localBuses = [];
+
     // --- MUTE CONTROL & SYNTHESIZED CHIME ---
     let isMuted = false;
 
@@ -206,7 +215,6 @@
 
     function playChime() {
       if (isMuted) return;
-
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         if (!AudioContext) return;
@@ -235,9 +243,7 @@
         gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.5);
         osc2.start(ctx.currentTime + 0.4);
         osc2.stop(ctx.currentTime + 1.5);
-      } catch(e) {
-        console.log("Audio synthesis blocked or unsupported.");
-      }
+      } catch(e) { console.log("Audio synthesis blocked or unsupported."); }
     }
 
     // --- TRAFFIC CONTROL & JITTER ---
@@ -331,7 +337,6 @@
           knownArrivedBuses.delete(b.number);
         }
       });
-
       if (newlyArrived.length > 0) triggerAnnouncement(newlyArrived);
     }
 
@@ -341,8 +346,7 @@
       updatePinDisplay();
     }
     function clearPin() {
-      currentPin = "";
-      updatePinDisplay();
+      currentPin = ""; updatePinDisplay();
       document.getElementById('loginErrorText').innerText = "Secure Area";
       document.getElementById('loginErrorText').className = "text-slate-400";
     }
@@ -361,13 +365,10 @@
         .then(res => res.json())
         .then(data => {
           if (data.status === "success") {
-            sessionPin = currentPin;
-            currentPin = "";
+            sessionPin = currentPin; currentPin = "";
             isViewOnly = (data.role === "viewer");
-
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             if (AudioContext) { const tempCtx = new AudioContext(); tempCtx.resume(); }
-
             launchApp();
           } else {
             clearPin();
@@ -383,13 +384,9 @@
     }
 
     function startViewOnlyMode() {
-      isViewOnly = true;
-      sessionPin = "";
-      clearPin();
-
+      isViewOnly = true; sessionPin = ""; clearPin();
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       if (AudioContext) { const tempCtx = new AudioContext(); tempCtx.resume(); }
-
       launchApp();
     }
 
@@ -411,23 +408,16 @@
       }
 
       document.getElementById('cameraContainer').classList.add('hidden-view');
-
       switchMode('carMode');
       fetchBuses();
       scheduleNextPoll();
     }
 
     function logout() {
-      sessionPin = "";
-      isViewOnly = false;
-      activeRequests = 0;
-      knownArrivedBuses.clear();
-
+      sessionPin = ""; isViewOnly = false; activeRequests = 0; knownArrivedBuses.clear(); localCars = []; localBuses = [];
       clearTimeout(pollTimer);
 
-      if (html5QrCode) {
-        html5QrCode.stop().catch(e => console.log(e));
-      }
+      if (html5QrCode && html5QrCode.isScanning) { html5QrCode.stop().catch(e => console.log(e)); }
       document.getElementById('cameraContainer').classList.add('hidden-view');
 
       document.getElementById('appView').classList.add('hidden-view');
@@ -449,12 +439,17 @@
       if (modeId === 'busMode') fetchBuses();
     }
 
-    // --- CARS ---
+    // --- CARS (Optimistic Updates) ---
     function fetchCars() {
       if (activeRequests > 0) return;
       fetch(`${API_URL}?action=listCars&pin=${sessionPin}`)
         .then(res => res.json())
-        .then(data => { if (data.status === "success" && activeRequests === 0) renderCars(data.data); });
+        .then(data => {
+          if (data.status === "success" && activeRequests === 0) {
+            localCars = data.data;
+            renderCars(localCars);
+          }
+        });
     }
 
     function renderCars(students) {
@@ -464,41 +459,42 @@
         return;
       }
 
-      students.sort((a, b) => {
+      let displayCars = [...students].sort((a, b) => {
         if (a.status === "Checked Off" && b.status !== "Checked Off") return 1;
         if (a.status !== "Checked Off" && b.status === "Checked Off") return -1;
         return 0;
       });
 
       let html = "";
-      students.forEach((s, index) => {
+      displayCars.forEach((s, index) => {
         const isChecked = s.status === "Checked Off";
+        const isSaving = s.status === "Saving...";
+
         const cardClass = isChecked ? "bg-slate-50 border-slate-200 opacity-60" : "bg-white border-transparent shadow-[0_4px_14px_rgba(0,0,0,0.04)] ring-1 ring-slate-100";
 
         let actionUI = "";
-
         if (!isViewOnly) {
-          // Staff View
-          if (!isChecked) {
+          if (isSaving) {
+            actionUI = `<button disabled class="bg-slate-100 text-slate-400 font-bold py-2 px-5 rounded-xl opacity-50">Saving...</button>`;
+          } else if (!isChecked) {
             actionUI = `<button onclick="markCarStatus(${s.row}, 'Checked Off', this)" class="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 active:scale-95 font-bold py-2 px-5 rounded-xl transition whitespace-nowrap">Pick Up</button>`;
           } else {
-            // Clickable to undo
             actionUI = `<button onclick="promptUndo(${s.row}, '${s.info.replace(/'/g, "\\'")}')" class="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 active:scale-95 font-bold py-2 px-4 rounded-xl flex items-center transition cursor-pointer whitespace-nowrap"><svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>Picked Up</button>`;
           }
         } else {
-          // View Only Classroom Board
           if (isChecked) {
             actionUI = `<div class="bg-emerald-100 text-emerald-700 font-bold py-2 px-4 rounded-xl flex items-center whitespace-nowrap"><svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>Picked Up</div>`;
           }
         }
 
-        let rankHtml = !isChecked ? `<div class="bg-indigo-600 text-white font-black w-8 h-8 rounded-full flex items-center justify-center text-sm mr-3 shadow-sm shadow-indigo-200 flex-shrink-0">#${index + 1}</div>` : "";
+        let rankHtml = (!isChecked && !isSaving) ? `<div class="bg-indigo-600 text-white font-black w-8 h-8 rounded-full flex items-center justify-center text-sm mr-3 shadow-sm shadow-indigo-200 flex-shrink-0">#${index + 1}</div>` : "";
+        if (isSaving) rankHtml = `<div class="bg-slate-300 text-white font-black w-8 h-8 rounded-full flex items-center justify-center text-sm mr-3 shadow-sm flex-shrink-0">...</div>`;
 
         html += `
           <div class="flex items-center justify-between p-4 rounded-2xl transition-all duration-300 ${cardClass} mb-3">
             <div class="flex items-center truncate mr-2">
               ${rankHtml}
-              <span class="font-bold text-lg truncate ${isChecked ? 'text-slate-400 line-through' : 'text-slate-800'}">${s.info}</span>
+              <span class="font-bold text-lg truncate ${isChecked ? 'text-slate-400 line-through' : 'text-slate-800'} ${isSaving ? 'opacity-50' : ''}">${s.info}</span>
             </div>
             ${actionUI}
           </div>`;
@@ -507,21 +503,17 @@
     }
 
     function markCarStatus(rowNum, newStatus, btnElement) {
+      let car = localCars.find(c => c.row === rowNum);
+      if (car) car.status = newStatus;
+      renderCars(localCars);
+
       activeRequests++;
-
-      // If btnElement exists (i.e. Pick Up button), show saving. Undo modal passes null.
-      if (btnElement) {
-        btnElement.innerText = "Saving...";
-        btnElement.disabled = true;
-        btnElement.classList.add("opacity-50", "pointer-events-none");
-      }
-
       fetch(`${API_URL}?action=updateCarStatus&pin=${sessionPin}&row=${rowNum}&status=${newStatus}`)
         .then(() => { setTimeout(() => { activeRequests--; if (activeRequests === 0) fetchCars(); }, 600); })
         .catch(() => { showToast("Network Error", "error"); activeRequests--; fetchCars(); });
     }
 
-    // --- UPGRADED INVISIBLE QR ENGINE ---
+    // --- UPGRADED INVISIBLE QR ENGINE (Zoomed & Aiming Reticle) ---
     let html5QrCode = null;
     let isProcessingQR = false;
     let scannedThisSession = new Set();
@@ -531,14 +523,22 @@
 
       if (container.classList.contains('hidden-view')) {
         container.classList.remove('hidden-view');
+
         if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
 
         isProcessingQR = false;
         scannedThisSession.clear();
 
+        let screenWidth = window.innerWidth;
+        let boxSize = screenWidth < 400 ? 200 : 250;
+
         html5QrCode.start(
           { facingMode: "environment" },
-          { fps: 10 },
+          {
+            fps: 10,
+            qrbox: { width: boxSize, height: boxSize },
+            aspectRatio: 1.0
+          },
           (decodedText) => {
             if (isProcessingQR || scannedThisSession.has(decodedText)) return;
 
@@ -548,12 +548,14 @@
           },
           (errorMessage) => { /* Ignore background frame noise */ }
         ).catch(err => {
-          showToast("Camera access denied.", "error");
+          showToast("Camera access denied or unavailable", "error");
           container.classList.add('hidden-view');
         });
       } else {
         container.classList.add('hidden-view');
-        if (html5QrCode) html5QrCode.stop().catch(err => console.log("Stop Error", err));
+        if (html5QrCode && html5QrCode.isScanning) {
+          html5QrCode.stop().catch(err => console.log("Stop error:", err));
+        }
       }
     }
 
@@ -566,19 +568,24 @@
     }
 
     function sendLogRequest(studentInfo) {
-      activeRequests++;
+      let fakeRowId = Date.now();
+      localCars.push({ row: fakeRowId, info: studentInfo, status: "Saving...", time: "" });
+      renderCars(localCars);
+      showToast(`${studentInfo} Added!`);
 
+      activeRequests++;
       fetch(`${API_URL}?action=scanQR&pin=${sessionPin}&studentInfo=${encodeURIComponent(studentInfo)}`)
         .then(res => res.json())
         .then(data => {
           setTimeout(() => {
             activeRequests--;
             if (data.status === "success") {
-              showToast(`${studentInfo} Added!`);
               if (activeRequests === 0) fetchCars();
               isProcessingQR = false;
             } else {
               showToast(data.message, "error");
+              localCars = localCars.filter(c => c.row !== fakeRowId);
+              renderCars(localCars);
               isProcessingQR = false;
             }
           }, 600);
@@ -587,16 +594,12 @@
 
     // --- THE FULL-SCREEN POPOUT ENGINE ---
     function openPopout() {
-      if (popoutWindow && !popoutWindow.closed) {
-        popoutWindow.focus();
-        return;
-      }
+      if (popoutWindow && !popoutWindow.closed) { popoutWindow.focus(); return; }
 
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       if (AudioContext) { const tempCtx = new AudioContext(); tempCtx.resume(); }
 
       popoutWindow = window.open('', 'BusTrackerPopup', 'width=800,height=600,top=50,right=50');
-
       popoutWindow.document.write(`
         <!DOCTYPE html>
         <html lang="en">
@@ -641,32 +644,18 @@
 
             function renderPopoutBuses(buses) {
               window.currentBuses = buses;
-
               const popContainer = document.getElementById('popoutGrid');
-              if (buses.length === 0) {
-                 popContainer.innerHTML = \`<h3 style="text-align:center; padding: 2rem; color: #94a3b8; font-family: sans-serif;">No buses found.</h3>\`;
-                 return;
-              }
+              if (buses.length === 0) { popContainer.innerHTML = \`<h3 style="text-align:center; padding: 2rem; color: #94a3b8; font-family: sans-serif;">No buses found.</h3>\`; return; }
 
               let totalBuses = buses.length;
-              let w = window.innerWidth;
-              let h = window.innerHeight - 50;
-
-              let bestCols = 1;
-              let bestRows = totalBuses;
-              let maxSize = 0;
+              let w = window.innerWidth; let h = window.innerHeight - 50;
+              let bestCols = 1; let bestRows = totalBuses; let maxSize = 0;
 
               for (let c = 1; c <= totalBuses; c++) {
                 let r = Math.ceil(totalBuses / c);
-                let cellW = w / c;
-                let cellH = h / r;
+                let cellW = w / c; let cellH = h / r;
                 let size = Math.min(cellW, cellH);
-
-                if (size > maxSize) {
-                  maxSize = size;
-                  bestCols = c;
-                  bestRows = r;
-                }
+                if (size > maxSize) { maxSize = size; bestCols = c; bestRows = r; }
               }
 
               popContainer.style.gridTemplateColumns = \`repeat(\${bestCols}, minmax(0, 1fr))\`;
@@ -674,20 +663,12 @@
 
               let popoutHtml = "";
               buses.forEach(b => {
-                let tileClass = "tile-pending";
-                let statusText = "WAITING";
-                let timeText = "--";
-
+                let tileClass = "tile-pending"; let statusText = "WAITING"; let timeText = "--";
                 if (b.status === "Delayed") { tileClass = "tile-delayed"; statusText = "DELAYED"; }
                 else if (b.status === "Arrived") { tileClass = "tile-arrived"; statusText = "HERE"; timeText = b.arrival; }
                 else if (b.status === "Departed") { tileClass = "tile-departed"; statusText = "GONE"; timeText = b.departure; }
 
-                popoutHtml += \`
-                  <div class="bus-tile \${tileClass}">
-                    <div class="bus-number">\${b.number}</div>
-                    <div class="bus-status">\${statusText}</div>
-                    <div class="bus-time">\${timeText}</div>
-                  </div>\`;
+                popoutHtml += \`<div class="bus-tile \${tileClass}"><div class="bus-number">\${b.number}</div><div class="bus-status">\${statusText}</div><div class="bus-time">\${timeText}</div></div>\`;
               });
               popContainer.innerHTML = popoutHtml;
             }
@@ -696,138 +677,87 @@
         </html>
       `);
       popoutWindow.document.close();
+      if (localBuses.length > 0) { popoutWindow.renderPopoutBuses(localBuses); }
       fetchBuses();
     }
 
+    // --- BUSES (Optimistic Updates) ---
     function fetchBuses() {
       if (activeRequests > 0) return;
-
       fetch(`${API_URL}?action=listBuses&pin=${sessionPin}`)
         .then(res => res.json())
         .then(data => {
           if (data.status === "success" && activeRequests === 0) {
-            checkBusArrivals(data.data);
-            renderBuses(data.data);
-
-            if (popoutWindow && !popoutWindow.closed && popoutWindow.renderPopoutBuses) {
-               popoutWindow.renderPopoutBuses(data.data);
-            }
+            localBuses = data.data;
+            checkBusArrivals(localBuses);
+            renderBuses(localBuses);
+            if (popoutWindow && !popoutWindow.closed && popoutWindow.renderPopoutBuses) { popoutWindow.renderPopoutBuses(localBuses); }
           }
         });
     }
 
     function renderBuses(buses) {
       const list = document.getElementById('busList');
-
-      if (buses.length === 0) {
-        list.innerHTML = `<div class="bg-white p-8 rounded-2xl text-center shadow-sm text-slate-400 font-medium border border-slate-100 flex flex-col items-center max-w-lg mx-auto"><span class="text-4xl mb-2">🚌</span>No buses set up.</div>`;
-        return;
-      }
+      if (buses.length === 0) { list.innerHTML = `<div class="bg-white p-8 rounded-2xl text-center shadow-sm text-slate-400 font-medium border border-slate-100 flex flex-col items-center max-w-lg mx-auto"><span class="text-4xl mb-2">🚌</span>No buses set up.</div>`; return; }
 
       let mainHtml = "";
-
       if (isViewOnly) {
         list.className = "grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-4 w-full";
         buses.forEach(b => {
-          let cardStyle = "bg-white text-slate-400 border-slate-200 shadow-sm opacity-60";
-          let statusText = "WAITING";
-          let timeText = "--";
-
-          if (b.status === "Delayed") {
-            cardStyle = "bg-rose-50 text-rose-600 border-rose-200 shadow-sm";
-            statusText = "DELAYED";
-          } else if (b.status === "Arrived") {
-            cardStyle = "bg-amber-400 text-amber-900 border-amber-500 shadow-lg transform scale-105 relative";
-            statusText = "HERE";
-            timeText = b.arrival;
-          } else if (b.status === "Departed") {
-            cardStyle = "bg-emerald-500 text-white border-emerald-600 shadow-md opacity-70";
-            statusText = "GONE";
-            timeText = b.departure;
-          }
-
-          mainHtml += `
-            <div class="flex flex-col items-center justify-center p-4 rounded-3xl border-2 ${cardStyle} aspect-square text-center">
-              <span class="text-5xl font-black tracking-tighter mb-1">${b.number}</span>
-              <span class="font-bold text-sm tracking-[0.2em] uppercase opacity-90">${statusText}</span>
-              <span class="text-xs font-bold mt-1 opacity-75">${timeText}</span>
-            </div>`;
+          let cardStyle = "bg-white text-slate-400 border-slate-200 shadow-sm opacity-60"; let statusText = "WAITING"; let timeText = "--";
+          if (b.status === "Delayed") { cardStyle = "bg-rose-50 text-rose-600 border-rose-200 shadow-sm"; statusText = "DELAYED"; }
+          else if (b.status === "Arrived") { cardStyle = "bg-amber-400 text-amber-900 border-amber-500 shadow-lg transform scale-105 relative"; statusText = "HERE"; timeText = b.arrival; }
+          else if (b.status === "Departed") { cardStyle = "bg-emerald-500 text-white border-emerald-600 shadow-md opacity-70"; statusText = "GONE"; timeText = b.departure; }
+          mainHtml += `<div class="flex flex-col items-center justify-center p-4 rounded-3xl border-2 ${cardStyle} aspect-square text-center"><span class="text-5xl font-black tracking-tighter mb-1">${b.number}</span><span class="font-bold text-sm tracking-[0.2em] uppercase opacity-90">${statusText}</span><span class="text-xs font-bold mt-1 opacity-75">${timeText}</span></div>`;
         });
       } else {
         list.className = "space-y-3 max-w-lg mx-auto";
         buses.forEach(b => {
-          let statusPill = "";
-          let btnArrived = "";
-          let btnDeparted = "";
-
-          if (b.status === "Pending" || b.status === "") {
-            statusPill = `<button onclick="updateBus(${b.row}, 'Delayed', this)" class="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1 rounded-full text-xs font-bold tracking-wide transition active:scale-95 cursor-pointer">WAITING</button>`;
-          } else if (b.status === "Delayed") {
-            statusPill = `<button onclick="updateBus(${b.row}, 'Pending', this)" class="bg-rose-100 hover:bg-rose-200 text-rose-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide transition active:scale-95 cursor-pointer">DELAYED</button>`;
-          } else if (b.status === "Arrived") {
-            statusPill = `<span class="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide cursor-default">HERE: ${b.arrival}</span>`;
-          } else if (b.status === "Departed") {
-            statusPill = `<span class="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide cursor-default">GONE: ${b.departure}</span>`;
-          }
+          let statusPill = ""; let btnArrived = ""; let btnDeparted = "";
+          if (b.status === "Pending" || b.status === "") { statusPill = `<button onclick="updateBus(${b.row}, 'Delayed')" class="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1 rounded-full text-xs font-bold tracking-wide transition active:scale-95 cursor-pointer">WAITING</button>`; }
+          else if (b.status === "Delayed") { statusPill = `<button onclick="updateBus(${b.row}, 'Pending')" class="bg-rose-100 hover:bg-rose-200 text-rose-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide transition active:scale-95 cursor-pointer">DELAYED</button>`; }
+          else if (b.status === "Arrived") { statusPill = `<span class="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide cursor-default">HERE: ${b.arrival}</span>`; }
+          else if (b.status === "Departed") { statusPill = `<span class="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide cursor-default">GONE: ${b.departure}</span>`; }
 
           if (b.status === "Pending" || b.status === "" || b.status === "Delayed") {
-            btnArrived = `<button onclick="updateBus(${b.row}, 'Arrived', this)" class="bg-white border-2 border-amber-400 text-amber-600 hover:bg-amber-50 font-bold py-2.5 px-4 rounded-xl active:scale-95 transition shadow-sm">Arrived</button>`;
+            btnArrived = `<button onclick="updateBus(${b.row}, 'Arrived')" class="bg-white border-2 border-amber-400 text-amber-600 hover:bg-amber-50 font-bold py-2.5 px-4 rounded-xl active:scale-95 transition shadow-sm">Arrived</button>`;
             btnDeparted = `<button disabled class="bg-slate-50 border-2 border-slate-200 text-slate-400 font-bold py-2.5 px-4 rounded-xl opacity-50 cursor-not-allowed">Departed</button>`;
           } else if (b.status === "Arrived") {
-            btnArrived = `<button onclick="updateBus(${b.row}, 'Pending', this)" class="bg-amber-500 text-white border-2 border-amber-500 hover:bg-amber-600 font-bold py-2.5 px-4 rounded-xl shadow-sm active:scale-95 transition flex items-center" title="Click to undo"><svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg> Arrived</button>`;
-            btnDeparted = `<button onclick="updateBus(${b.row}, 'Departed', this)" class="bg-white border-2 border-emerald-500 text-emerald-600 hover:bg-emerald-50 font-bold py-2.5 px-4 rounded-xl active:scale-95 transition shadow-sm">Departed</button>`;
+            btnArrived = `<button onclick="updateBus(${b.row}, 'Pending')" class="bg-amber-500 text-white border-2 border-amber-500 hover:bg-amber-600 font-bold py-2.5 px-4 rounded-xl shadow-sm active:scale-95 transition flex items-center" title="Click to undo"><svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg> Arrived</button>`;
+            btnDeparted = `<button onclick="updateBus(${b.row}, 'Departed')" class="bg-white border-2 border-emerald-500 text-emerald-600 hover:bg-emerald-50 font-bold py-2.5 px-4 rounded-xl active:scale-95 transition shadow-sm">Departed</button>`;
           } else if (b.status === "Departed") {
             btnArrived = `<button disabled class="bg-slate-50 border-2 border-slate-200 text-slate-400 font-bold py-2.5 px-4 rounded-xl opacity-50 cursor-not-allowed">Arrived</button>`;
-            btnDeparted = `<button onclick="updateBus(${b.row}, 'Arrived', this)" class="bg-emerald-500 text-white border-2 border-emerald-500 hover:bg-emerald-600 font-bold py-2.5 px-4 rounded-xl shadow-sm active:scale-95 transition flex items-center" title="Click to undo"><svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg> Departed</button>`;
+            btnDeparted = `<button onclick="updateBus(${b.row}, 'Arrived')" class="bg-emerald-500 text-white border-2 border-emerald-500 hover:bg-emerald-600 font-bold py-2.5 px-4 rounded-xl shadow-sm active:scale-95 transition flex items-center" title="Click to undo"><svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg> Departed</button>`;
           }
-
-          mainHtml += `
-            <div class="bg-white p-5 rounded-2xl shadow-[0_4px_14px_rgba(0,0,0,0.04)] ring-1 ring-slate-100 flex justify-between items-center transition-all">
-              <div>
-                <div class="font-extrabold text-xl text-slate-800 mb-1.5">Bus ${b.number}</div>
-                ${statusPill}
-              </div>
-              <div class="flex space-x-2">${btnArrived}${btnDeparted}</div>
-            </div>`;
+          mainHtml += `<div class="bg-white p-5 rounded-2xl shadow-[0_4px_14px_rgba(0,0,0,0.04)] ring-1 ring-slate-100 flex justify-between items-center transition-all"><div><div class="font-extrabold text-xl text-slate-800 mb-1.5">Bus ${b.number}</div>${statusPill}</div><div class="flex space-x-2">${btnArrived}${btnDeparted}</div></div>`;
         });
       }
       list.innerHTML = mainHtml;
     }
 
-    function updateBus(rowNum, newStatus, btnElement) {
-      activeRequests++;
-      if(btnElement.tagName.toLowerCase() === 'BUTTON' && btnElement.innerText !== 'Arrived' && btnElement.innerText !== 'Departed') {
-         btnElement.classList.add('opacity-50');
-      } else {
-         const container = btnElement.parentElement;
-         container.innerHTML = `<span class="text-slate-400 font-semibold px-4 py-2">Saving...</span>`;
+    function updateBus(rowNum, newStatus) {
+      let bus = localBuses.find(b => b.row === rowNum);
+      if (bus) {
+        bus.status = newStatus;
+        let timeString = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        if (newStatus === "Arrived") bus.arrival = timeString;
+        if (newStatus === "Departed") bus.departure = timeString;
       }
 
+      renderBuses(localBuses);
+      if (popoutWindow && !popoutWindow.closed && popoutWindow.renderPopoutBuses) { popoutWindow.renderPopoutBuses(localBuses); }
+
+      activeRequests++;
       fetch(`${API_URL}?action=updateBus&pin=${sessionPin}&row=${rowNum}&status=${newStatus}`)
-        .then(() => {
-          setTimeout(() => {
-            activeRequests--;
-            if (activeRequests === 0) fetchBuses();
-          }, 600);
-        })
+        .then(() => { setTimeout(() => { activeRequests--; if (activeRequests === 0) fetchBuses(); }, 600); })
         .catch(() => { showToast("Network Error", "error"); activeRequests--; fetchBuses(); });
     }
 
     function confirmEndOfDay() {
-      hideEodModal();
-      showToast("Cleaning up...", "success");
-
+      hideEodModal(); showToast("Cleaning up...", "success");
       fetch(`${API_URL}?action=endOfDay&pin=${sessionPin}`)
         .then(res => res.json())
-        .then(data => {
-          if (data.status === "success") {
-            showToast("Reset complete!");
-            fetchCars();
-            fetchBuses();
-          } else {
-            showToast(data.message, "error");
-          }
-        });
+        .then(data => { if (data.status === "success") { showToast("Reset complete!"); fetchCars(); fetchBuses(); } else { showToast(data.message, "error"); } });
     }
   </script>
 </body>
